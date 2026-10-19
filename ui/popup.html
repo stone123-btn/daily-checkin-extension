@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>每日签到</title><link rel="stylesheet" href="styles.css">
+</head>
+<body class="popup">
+  <header class="brand"><a class="wordmark" href="popup.html"><img src="../icons/icon32.png" width="26" height="26" alt="">每日签到<span>DAILY</span></a><button id="settings" class="text-button" title="打开设置">设置 ↗</button></header>
+  <main>
+    <div class="intro"><span class="eyebrow" id="today">TODAY</span><h1>今天，也记得<em>签到。</em></h1></div>
+    <div class="schedule">
+      <div class="schedule-heading"><span class="schedule-dot" id="schedule-dot"></span><strong id="schedule-time">每日签到时间</strong><span class="schedule-label" id="schedule-label">自动签到</span></div>
+      <form id="time-form" class="inline-editor" novalidate>
+        <div class="editor-row"><label for="time">每日时间</label><input id="time" type="time" required aria-describedby="schedule-zone time-feedback"><button id="save-time" class="compact-save" type="submit" disabled>保存时间</button></div>
+        <small id="schedule-zone">新加坡时间 · UTC+8</small><p id="time-feedback" class="editor-feedback" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+    <div class="toolbar"><button class="primary" id="run-all">一键签到 <span aria-hidden="true">↗</span></button><button class="secondary" id="inspect-all" title="只检查网站状态，不提交签到">刷新状态</button></div>
+    <div class="notification-hint" id="notification-hint" hidden><span>桌面提醒未开启，验证可能需要你处理。</span><button class="text-button" id="enable-notifications">开启提醒</button></div>
+    <p class="feedback" id="feedback" role="status" aria-live="polite"></p>
+    <section class="sites" id="sites" aria-label="网站签到状态"></section>
+    <p class="fine-print">关闭后下次启动补跑；验证失败请打开网站处理。</p>
+  </main>
+  <footer><span>本地运行 · 沿用浏览器登录</span><button class="text-button" id="export-diagnostics">导出诊断</button><span id="version"></span></footer>
+  <template id="message-editor-template">
+    <form id="message-form" class="inline-editor message-editor" novalidate>
+      <label for="message">固定签到留言</label>
+      <div class="editor-row"><input id="message" type="text" placeholder="输入想长期使用的留言" aria-describedby="message-feedback"><button id="save-message" class="compact-save" type="submit" disabled>保存留言</button></div>
+      <p id="message-feedback" class="editor-feedback" role="status" aria-live="polite">保存后持续使用，下次新任务生效。</p>
+    </form>
+  </template>
+  <script src="../shared/core.js"></script><script type="module" src="popup.js"></script>
+</body>
+</html>

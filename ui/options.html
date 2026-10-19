@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>签到设置 · 每日签到</title><link rel="stylesheet" href="styles.css"></head>
+<body class="options">
+  <div class="options-wrap">
+    <header class="brand"><a class="wordmark" href="popup.html"><img src="../icons/icon32.png" width="26" height="26" alt="">每日签到<span>DAILY</span></a><span class="eyebrow">PREFERENCES / 01</span></header>
+    <main class="options-layout">
+      <aside><span class="eyebrow">YOUR DAILY ROUTINE</span><h1>留一点时间，<br><em>给每天的积累。</em></h1><p>设好时间，保持登录。<br>需要你时，插件会提醒。</p><div class="aside-note"><span>09:00</span><small>默认每日 · 新加坡时间</small></div></aside>
+      <form id="settings-form" novalidate>
+        <section class="settings-section"><div class="section-heading"><span>01</span><h2>签到安排</h2></div>
+          <label class="switch-row"><span><strong>每日自动尝试</strong><small>关闭后仍可在弹窗手动签到</small></span><input id="enabled" type="checkbox" role="switch" checked></label>
+          <div class="field-row"><label for="time">每日时间</label><div><input id="time" type="time" value="09:00" required><p class="help">新加坡时间 UTC+8，两站共用。改到今天已过的时间，从明天生效；今天已自动执行的站点不会重复发起。浏览器恢复后补跑当天到期任务。</p><p class="help" id="time-plan" role="status"></p></div></div>
+        </section>
+        <section class="settings-section"><div class="section-heading"><span>02</span><h2>网站与留言</h2></div>
+          <label class="switch-row"><span><strong>烧饼论坛</strong><small>sb.sb/checkin/</small></span><input id="site-sb" type="checkbox" role="switch" checked></label>
+          <label class="field-label" for="message">烧饼固定签到留言</label><input class="wide-input" id="message" type="text" value="666" placeholder="输入你想长期使用的留言" aria-describedby="message-help message-error"><p class="help" id="message-help">设置一次，保存后持续使用，直到再次修改。最多 120 个字符；首次默认 666。<br>新留言从下次签到任务生效，当前任务及其自动重试保持原留言。</p><p class="feedback error" id="message-error" role="alert"></p>
+          <label class="switch-row site-gap"><span><strong>NodeSeek</strong><small>nodeseek.com/board · 固定领取 5 鸡腿</small></span><input id="site-nodeseek" type="checkbox" role="switch" checked></label>
+        </section>
+        <section class="settings-section"><div class="section-heading"><span>03</span><h2>需要你时</h2></div>
+          <label class="switch-row"><span><strong>桌面提醒</strong><small>需要登录、验证或处理失败时提醒</small></span><input id="notifications" type="checkbox" role="switch"></label>
+          <p class="help">首次开启会申请通知权限。未开启时，可查看插件图标上的提醒数字。</p>
+          <div class="notice">烧饼会自动尝试点击原生验证一次，失败时请在原页面手动处理。其他机器人验证及登录仍需你完成；验证通过后由网站继续提交。</div>
+        </section>
+        <div class="save-row"><p class="feedback" id="feedback" role="status" aria-live="polite"></p><button class="primary" type="submit" disabled>保存设置 <span aria-hidden="true">↗</span></button></div>
+      </form>
+    </main>
+    <footer><span>设置只保存在此浏览器。插件不保存账号密码。</span><a href="https://sb.sb/checkin/" target="_blank" rel="noreferrer">烧饼 ↗</a><a href="https://www.nodeseek.com/board" target="_blank" rel="noreferrer">NodeSeek ↗</a></footer>
+  </div>
+  <script src="../shared/core.js"></script><script type="module" src="options.js"></script>
+</body></html>
