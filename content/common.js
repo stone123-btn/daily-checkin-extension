@@ -11,7 +11,10 @@
   let working = false;
   let ownDispatch = false;
   let attempted = false;
+  let messagePrepared = false;
+  let submitClicked = false;
   let verificationAttempted = false;
+  let verificationClicked = false;
   let external = false;
   let lastReport = '';
   let attachAt = 0;
@@ -64,10 +67,13 @@
     const response = await chrome.runtime.sendMessage({ type: 'CHECKIN_HELLO' });
     attachAt = Date.now();
     if (!response?.task) { stopped = true; cleanup(); return; }
-    if (task?.id !== response.task.id) { attempted = false; verificationAttempted = false; external = false; lastReport = ''; structureAt = 0; notice?.host.remove(); notice = null; }
+    if (task?.id !== response.task.id) { attempted = false; messagePrepared = false; submitClicked = false; verificationAttempted = false; verificationClicked = false; external = false; lastReport = ''; structureAt = 0; notice?.host.remove(); notice = null; }
     task = response.task;
     attempted ||= task.submittedAt != null;
+    messagePrepared ||= task.messagePreparedAt != null;
+    submitClicked ||= task.submitClickedAt != null;
     verificationAttempted ||= task.verificationAttemptedAt != null;
+    verificationClicked ||= task.verificationClickedAt != null;
     message = response.message;
     if (task.status === 'unknown') external = true;
   }
@@ -93,10 +99,16 @@
         return;
       }
       const inspecting = task.mode === 'inspect' || external;
-      if (!inspecting && !attempted) fill(view.field);
+      if (!inspecting && !attempted) {
+        fill(view.field);
+        if (siteId === 'sb' && view.field && view.field.value === message && !messagePrepared) {
+          const progress = await send({ type: 'CHECKIN_PROGRESS', phase: 'message_prepared' });
+          messagePrepared = progress?.ok === true;
+        }
+      }
       if (view.status === 'waiting_verification' || view.status === 'needs_login') {
         const nativeWaiting = view.status === 'waiting_verification' && view.nativeVerification && attempted;
-        const detail = view.verificationState === 'error' ? 'verification_error' : view.verificationState === 'verifying' ? 'verification_running' : nativeWaiting && verificationAttempted ? 'verification_clicked' : undefined;
+        const detail = view.verificationState === 'error' ? 'verification_error' : view.verificationState === 'verifying' ? 'verification_running' : nativeWaiting && verificationClicked ? 'verification_clicked' : undefined;
         await report(view.status, nativeWaiting ? 'native_verification' : undefined, detail);
         if (nativeWaiting && !external && !verificationAttempted && view.verificationButton) {
           verificationAttempted = true;
@@ -105,6 +117,8 @@
             const current = adapter.inspect(document);
             if (current.status === 'waiting_verification' && current.nativeVerification && current.verificationButton?.isConnected) {
               current.verificationButton.click();
+              verificationClicked = true;
+              await send({ type: 'CHECKIN_PROGRESS', phase: 'verification_clicked' });
               await report('waiting_verification', 'native_verification', 'verification_clicked');
               show('waiting_verification', '已尝试点击网站验证，正在等待网站结果。'); return;
             }
@@ -115,7 +129,7 @@
       }
       if (view.status !== 'ready') return;
       if (attempted) {
-        show(task.status === 'unknown' ? 'unknown' : 'submitting', task.status === 'unknown' ? task.message : '已点击签到，正在等待网站确认结果。');
+        show(task.status === 'unknown' ? 'unknown' : 'submitting', task.status === 'unknown' ? task.message : submitClicked ? '已点击签到，正在等待网站确认结果。' : '已发放签到点击许可，正在核对网站结果。');
         return;
       }
       if (inspecting) {
@@ -133,6 +147,8 @@
       }
       ownDispatch = true;
       try { current.button.click(); } finally { ownDispatch = false; }
+      submitClicked = true;
+      await send({ type: 'CHECKIN_PROGRESS', phase: 'submit_clicked' });
       show('submitting', '已点击签到，正在等待网站确认。需要验证时请在网站处理。');
     } catch {
       if (attempted) show('unknown', '结果尚未确认。请重新打开插件查看状态。');

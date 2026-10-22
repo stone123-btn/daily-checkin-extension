@@ -12,6 +12,7 @@
     failed: '检查失败', retry_pending: '等待重试', cancelled: '已停止'
   });
   const ACTIVE = new Set(['checking', 'waiting_verification', 'needs_login', 'submitting']);
+  const RECOVERY_CHECK_MS = 30000;
   const DETAILS = Object.freeze({
     region_missing: '尚未找到签到区域', form_missing: '尚未找到签到表单',
     controls_pending: '签到控件尚未加载完成', button_disabled: '签到按钮暂不可用',
@@ -21,6 +22,8 @@
     verification_timeout: '机器人验证等待已超时', login_timeout: '登录等待已超时',
     verification_clicked: '已尝试点击网站原生验证', verification_running: '网站正在执行机器人验证',
     verification_error: '网站验证未通过，需要手动处理', verification_unavailable: '验证按钮发生变化，需要手动处理',
+    message_prepared: '签到留言已准备', submit_permitted: '已发放一次签到点击许可', submit_clicked: '页面已点击签到按钮',
+    verification_permitted: '已发放一次原生验证点击许可',
     page_changed: '取得提交许可后页面发生变化', unknown_result: '提交后尚未获得网站确认'
   });
 
@@ -89,7 +92,7 @@
 
   function publicTask(task) {
     if (!task) return null;
-    const keys = ['id', 'siteId', 'status', 'message', 'startedAt', 'updatedAt', 'submittedAt', 'expiresAt', 'retryCount', 'nextRetryAt', 'source', 'mode', 'scheduledFor', 'checkedAt', 'confirmedAt', 'attentionReason', 'verificationAttemptedAt'];
+    const keys = ['id', 'siteId', 'status', 'message', 'startedAt', 'updatedAt', 'submittedAt', 'expiresAt', 'retryCount', 'nextRetryAt', 'source', 'mode', 'scheduledFor', 'checkedAt', 'confirmedAt', 'attentionReason', 'verificationAttemptedAt', 'nativeVerification', 'tabId', 'owned', 'uncertain', 'recoveryReason', 'recoveryOriginTaskId', 'messagePreparedAt', 'submitPermitAt', 'submitClickedAt', 'verificationPermitAt', 'verificationClickedAt'];
     const result = Object.fromEntries(keys.filter(key => task[key] !== undefined).map(key => [key, task[key]]));
     function observation(value, phaseKey) {
       const safe = {};
@@ -104,6 +107,17 @@
     return result;
   }
 
+  function publicRecovery(recovery, task, now = Date.now()) {
+    if (!recovery) return null;
+    const keys = ['originTaskId', 'day', 'createdAt', 'checkTaskId', 'checkedAt'];
+    const result = Object.fromEntries(keys.filter(key => recovery[key] !== undefined).map(key => [key, recovery[key]]));
+    result.reason = Object.hasOwn(DETAILS, recovery.reason) ? recovery.reason : 'unknown_result';
+    result.canRetry = task?.id === recovery.checkTaskId && task?.recoveryOriginTaskId === recovery.originTaskId &&
+      task.mode === 'inspect' && task.status === 'unknown' && task.lastObservation?.status === 'ready' &&
+      Number.isFinite(recovery.checkedAt) && now >= recovery.checkedAt && now - recovery.checkedAt <= RECOVERY_CHECK_MS;
+    return result;
+  }
+
   function diagnosticReport(snapshot, version, now = Date.now()) {
     const settings = normalizeSettings(snapshot.settings);
     const recordKeys = ['lastScheduledDay', 'lastAttemptDay', 'lastAttemptAt', 'lastSuccessDay', 'lastConfirmedAt'];
@@ -112,9 +126,10 @@
       settings: { enabled: settings.enabled, time: settings.time, timeZone: TIME_ZONE, notifications: settings.notifications, sites: settings.sites },
       records: Object.fromEntries(Object.keys(SITES).filter(id => snapshot.records?.[id]).map(id => [id, Object.fromEntries(recordKeys.filter(key => snapshot.records[id][key] !== undefined).map(key => [key, snapshot.records[id][key]]))])),
       tasks: Object.fromEntries(Object.keys(SITES).filter(id => snapshot.tasks?.[id]).map(id => [id, publicTask(snapshot.tasks[id])])),
+      recoveries: Object.fromEntries(Object.keys(SITES).filter(id => snapshot.recoveries?.[id]).map(id => [id, publicRecovery(snapshot.recoveries[id], snapshot.tasks?.[id], now)])),
       history: (snapshot.history || []).slice(0, 40).map(publicTask)
     };
   }
 
-  globalThis.CheckinCore = Object.freeze({ SITES, LABELS, DETAILS, TIME_ZONE, ACTIVE, messageError, timeError, normalizeSettings, dayKey, nextDailyAt, dueSites, siteForUrl, canSubmit, retryAt, publicTask, diagnosticReport });
+  globalThis.CheckinCore = Object.freeze({ SITES, LABELS, DETAILS, TIME_ZONE, ACTIVE, RECOVERY_CHECK_MS, messageError, timeError, normalizeSettings, dayKey, nextDailyAt, dueSites, siteForUrl, canSubmit, retryAt, publicTask, publicRecovery, diagnosticReport });
 })();

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "每日签到 · 烧饼与 NodeSeek",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "每天定时尝试签到，也可一键运行；需要登录或机器人验证时提醒手动处理。",
   "minimum_chrome_version": "120",
   "permissions": ["storage", "alarms"],

@@ -26,12 +26,28 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
   let queue = Promise.resolve();
   function locked(fn) {
     const result = queue.then(async () => {
-      const value = await api.storage.local.get(['settings', 'tasks', 'records', 'history']);
-      const state = { settings: C.normalizeSettings(value.settings), tasks: value.tasks || {}, records: value.records || {}, history: value.history || [] };
+      const value = await api.storage.local.get(['settings', 'tasks', 'records', 'history', 'recoveries']);
+      const state = { settings: C.normalizeSettings(value.settings), tasks: value.tasks || {}, records: value.records || {}, history: value.history || [], recoveries: value.recoveries || {} };
       // Freeze legacy tasks before a settings update can replace their message.
       for (const task of Object.values(state.tasks)) {
         if (task.siteId === 'sb' && typeof task.checkinMessage !== 'string') task.checkinMessage = state.settings.message;
       }
+      let migrated = false;
+      for (const siteId of Object.keys(C.SITES)) {
+        const task = state.tasks[siteId];
+        const recovery = state.recoveries[siteId];
+        if (recovery && (recovery.day !== C.dayKey(now()) || ['success', 'already_done'].includes(task?.status))) {
+          delete state.recoveries[siteId]; migrated = true;
+        }
+        if (!state.recoveries[siteId] && unresolved(task) && (!C.ACTIVE.has(task.status) || task.expiresAt <= now())) {
+          rememberRecovery(state, task); migrated = true;
+        }
+        const context = state.recoveries[siteId];
+        if (context && task && (task.recoveryReason !== context.reason || task.recoveryOriginTaskId !== context.originTaskId)) {
+          task.recoveryReason = context.reason; task.recoveryOriginTaskId = context.originTaskId; migrated = true;
+        }
+      }
+      if (migrated) await save(state);
       return fn(state);
     });
     queue = result.catch(() => {});
@@ -48,6 +64,51 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
   function valid(task, message, sender) {
     return !!task && task.id === message.taskId && sender.frameId === 0 &&
       sender.tab?.id === task.tabId && C.siteForUrl(sender.tab.url) === task.siteId && message.siteId === task.siteId;
+  }
+  function unresolved(task) {
+    return task && (task.submittedAt != null || task.uncertain) && !['success', 'already_done'].includes(task.status) &&
+      C.dayKey(task.uncertainAt ?? task.submittedAt ?? task.startedAt) === C.dayKey(now());
+  }
+  function rememberRecovery(state, task) {
+    if (!unresolved(task) || state.recoveries[task.siteId]) return;
+    // v0.1.5 replaced the original task with uncertain read-only queries. Its
+    // history is the only surviving source of the original failure in that case.
+    const resolved = state.history.filter(old => old.siteId === task.siteId && ['success', 'already_done'].includes(old.status));
+    const resolvedIds = new Set(resolved.map(old => old.id));
+    const confirmedAt = Math.max(state.records[task.siteId]?.lastConfirmedAt || 0, ...resolved.map(old => old.confirmedAt || 0));
+    const origin = task.submittedAt != null ? { ...task } : { ...(state.history.find(old =>
+      old.siteId === task.siteId && old.submittedAt != null && old.submittedAt > confirmedAt && !resolvedIds.has(old.id) && unresolved(old)) || task) };
+    if (origin.siteId === 'sb' && origin.verificationAttemptedAt != null) origin.nativeVerification = true;
+    const reason = origin.attentionReason || (origin.status === 'waiting_verification' && origin.expiresAt <= now() ? 'verification_timeout' : 'unknown_result');
+    state.recoveries[task.siteId] = { origin, originTaskId: origin.id, reason, day: C.dayKey(now()), createdAt: now() };
+  }
+  function recoveryView(state, siteId) { return C.publicRecovery(state.recoveries[siteId], state.tasks[siteId], now()); }
+  async function ownedPage(task) {
+    if (!task) return null;
+    const matches = page => C.siteForUrl(page?.url) === task.siteId && new URL(page.url).hash === marker(task.id);
+    try {
+      const page = await api.tabs.get(task.tabId);
+      if (task.owned && matches(page)) return page;
+    } catch { /* Discover the exact marker after a worker/browser restart. */ }
+    const pages = await api.tabs.query({ url: `https://${C.SITES[task.siteId].host}/*` });
+    const page = pages.find(matches);
+    if (page) { task.tabId = page.id; task.owned = true; }
+    return page || null;
+  }
+  async function retire(task, close = false) {
+    if (!task) return;
+    await api.alarms.clear(deadlineName(task));
+    await api.alarms.clear(retryName(task));
+    const page = await ownedPage(task);
+    if (!page) return;
+    try { await api.tabs.sendMessage(page.id, { type: 'CHECKIN_STOP', taskId: task.id }); } catch { /* Page may already be closed. */ }
+    if (close) {
+      try {
+        // Recheck ownership after sending STOP; a user may have navigated away.
+        const current = await api.tabs.get(page.id);
+        if (C.siteForUrl(current.url) === task.siteId && new URL(current.url).hash === marker(task.id)) await api.tabs.remove(page.id);
+      } catch { /* Do not affect a closed or unrelated page. */ }
+    }
   }
   async function notify(state, task) {
     if (!ATTENTION.has(task.status) || !state.settings.notifications) return;
@@ -92,7 +153,11 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
     if (['success', 'already_done'].includes(status)) {
       task.confirmedAt = now(); task.checkedAt = now(); delete task.attentionReason;
       state.records[task.siteId] = { ...state.records[task.siteId], lastSuccessDay: C.dayKey(now()), lastConfirmedAt: now() };
+      const recovery = state.recoveries[task.siteId];
+      delete state.recoveries[task.siteId];
+      if (recovery?.originTaskId !== task.id) await retire(recovery?.origin, true);
     }
+    if (status === 'unknown') rememberRecovery(state, task);
     if (changed && FINAL.has(status)) history(state, task);
     await save(state);
     if (FINAL.has(status)) await api.alarms.clear(deadlineName(task));
@@ -118,18 +183,19 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
     if (!C.SITES[siteId]) throw new Error('不支持的网站');
     if (!state.settings.sites[siteId]) return { ok: false, disabled: true };
     const previous = state.tasks[siteId];
-    if (previous?.status === 'retry_pending' && options.mode === 'inspect') return { ok: true, busy: true, task: { ...previous } };
+    if (previous?.status === 'retry_pending' && options.mode === 'inspect') return { ok: true, busy: true, outcome: 'busy', task: { ...previous } };
     if (previous && C.ACTIVE.has(previous.status) && previous.expiresAt > now()) {
       if (options.source === 'scheduled') {
         state.records[siteId] = { ...state.records[siteId], lastScheduledDay: C.dayKey(now()) };
         await save(state);
       }
-      return { ok: true, busy: true, task: { ...previous } };
+      return { ok: true, busy: true, outcome: previous.mode === 'inspect' ? 'checking' : 'busy', task: { ...previous } };
     }
-    const unresolved = previous && (previous.submittedAt != null || previous.uncertain) && !['success', 'already_done'].includes(previous.status) && C.dayKey(previous.uncertainAt ?? previous.submittedAt ?? previous.startedAt) === C.dayKey(now());
+    const recovery = state.recoveries[siteId];
+    const needsRecovery = !!recovery;
     // The native CAP callback belongs to this document. Keep it alive when a
     // user rechecks an expired verification; replacing the task loses its result.
-    if (unresolved && ['unknown', 'waiting_verification', 'submitting'].includes(previous.status) && previous.nativeVerification && previous.owned) {
+    if (needsRecovery && !options.recoveryCheck && ['unknown', 'waiting_verification', 'submitting'].includes(previous?.status) && previous.nativeVerification && previous.owned) {
       try {
         const page = await api.tabs.get(previous.tabId);
         if (C.siteForUrl(page.url) === siteId && new URL(page.url).hash === marker(previous.id)) {
@@ -140,17 +206,22 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
           previous.mode = 'inspect'; previous.lastRecheckedAt = now();
           await save(state);
           try { await api.tabs.sendMessage(previous.tabId, { type: 'CHECKIN_POLL' }); } catch { /* A loading original document attaches later. */ }
-          return { ok: true, resumed: true, task: { ...previous } };
+          return { ok: true, resumed: true, outcome: 'recovery_required', task: { ...previous } };
         }
       } catch { /* A closed verification page can only be checked in a new read-only task. */ }
     }
+    if (recovery && previous?.id !== recovery.originTaskId && previous?.mode === 'inspect' && previous.submittedAt == null) await retire(previous, true);
     const task = {
       id: uuid(), siteId, status: 'checking', message: MESSAGES.checking, startedAt: now(), updatedAt: now(),
       expiresAt: now() + LOAD_MS, submittedAt: null, owned: true, tabId: null,
       source: options.source === 'scheduled' ? 'scheduled' : 'manual',
-      mode: options.mode === 'inspect' || unresolved ? 'inspect' : 'execute',
-      uncertain: !!unresolved, retryCount: options.retryCount || 0
+      mode: options.mode === 'inspect' || needsRecovery ? 'inspect' : 'execute',
+      uncertain: needsRecovery, retryCount: options.retryCount || 0
     };
+    if (recovery) {
+      task.recoveryReason = recovery.reason; task.recoveryOriginTaskId = recovery.originTaskId;
+      if (options.recoveryCheck) { recovery.checkTaskId = task.id; delete recovery.checkedAt; }
+    }
     if (siteId === 'sb') task.checkinMessage = options.checkinMessage ?? state.settings.message;
     state.tasks[siteId] = task;
     trace(task, 'checking');
@@ -172,7 +243,7 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
       await save(state);
       await deadline(task);
       try { await api.tabs.sendMessage(task.tabId, { type: 'CHECKIN_POLL' }); } catch { /* A newly loading page attaches at document_idle. */ }
-      return { ok: true, task: { ...task } };
+      return { ok: true, outcome: needsRecovery && !options.recoveryCheck ? 'recovery_required' : task.mode === 'inspect' ? 'checking' : 'started', task: { ...task } };
     } catch {
       await fail(state, task, true);
       return { ok: false, task: { ...task } };
@@ -181,6 +252,28 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
 
   const controller = {
     start: (siteId, options) => locked(state => startWithin(state, siteId, options)),
+    checkRecovery: siteId => locked(async state => {
+      if (!state.recoveries[siteId]) return { ok: false, error: '没有待恢复的任务，请刷新状态。' };
+      return startWithin(state, siteId, { mode: 'inspect', recoveryCheck: true });
+    }),
+    retryRecovery: (siteId, request = {}) => locked(async state => {
+      const recovery = state.recoveries[siteId];
+      const task = state.tasks[siteId];
+      if (request.confirmed !== true || !state.settings.sites[siteId] || !recovery || task?.id !== request.taskId || !recoveryView(state, siteId).canRetry) {
+        return { ok: false, error: '核对结果已变化或过期，请重新核对后再确认。' };
+      }
+      await retire(recovery.origin, true);
+      if (task.id !== recovery.originTaskId) await retire(task, true);
+      delete state.recoveries[siteId];
+      // Consume the confirmation before any new page can request a permit.
+      // A simultaneous confirmation now sees the new task, never this check ID.
+      const result = await startWithin(state, siteId, { mode: 'execute' });
+      result.task.recoveryOriginTaskId = recovery.originTaskId;
+      result.task.recoveryReason = recovery.reason;
+      Object.assign(state.tasks[siteId], { recoveryOriginTaskId: recovery.originTaskId, recoveryReason: recovery.reason });
+      await save(state);
+      return result;
+    }),
     recheckStale: () => locked(async state => {
       const results = [];
       for (const siteId of Object.keys(C.SITES)) {
@@ -191,11 +284,16 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
       }
       return { ok: true, results };
     }),
-    snapshot: () => locked(async state => ({ settings: state.settings, tasks: Object.fromEntries(Object.entries(state.tasks).map(([id, task]) => [id, C.publicTask(task)])), records: state.records, history: state.history })),
+    snapshot: () => locked(async state => ({ settings: state.settings, tasks: Object.fromEntries(Object.entries(state.tasks).map(([id, task]) => [id, C.publicTask(task)])), records: state.records, history: state.history.map(C.publicTask), recoveries: Object.fromEntries(Object.keys(state.recoveries).map(id => [id, recoveryView(state, id)])) })),
     attach: sender => locked(async state => {
       const siteId = C.siteForUrl(sender.tab?.url);
       if (!siteId || sender.frameId !== 0) return { task: null };
-      const task = state.tasks[siteId];
+      let task = state.tasks[siteId];
+      const origin = state.recoveries[siteId]?.origin;
+      if (origin && origin.id !== task?.id && new URL(sender.tab.url).hash === marker(origin.id)) {
+        origin.tabId = sender.tab.id; origin.owned = true; await save(state);
+        return { task: { ...C.publicTask(origin), mode: 'inspect' }, message: origin.checkinMessage };
+      }
       if (!task) return { task: null };
       if (task.tabId !== sender.tab.id) {
         if (new URL(sender.tab.url).hash !== marker(task.id) || !task.owned) return { task: null };
@@ -205,12 +303,29 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
       if (!C.ACTIVE.has(task.status) && task.status !== 'unknown') return { task: null };
       return { task: { ...C.publicTask(task), mode: task.submittedAt != null || task.status === 'unknown' ? 'inspect' : task.mode }, message: task.checkinMessage };
     }),
+    progress: (message, sender) => locked(async state => {
+      const task = state.tasks[message.siteId];
+      if (!valid(task, message, sender) || task.mode !== 'execute' || !C.ACTIVE.has(task.status) || task.expiresAt <= now()) return { ok: false };
+      const phases = {
+        message_prepared: { key: 'messagePreparedAt', allowed: task.siteId === 'sb' && task.submittedAt == null },
+        submit_clicked: { key: 'submitClickedAt', allowed: task.submittedAt != null },
+        verification_clicked: { key: 'verificationClickedAt', allowed: task.verificationAttemptedAt != null }
+      };
+      const phase = Object.hasOwn(phases, message.phase) && phases[message.phase];
+      if (!phase?.allowed) return { ok: false };
+      if (task[phase.key] == null) {
+        task[phase.key] = now(); task.updatedAt = now();
+        trace(task, task.status, message.phase);
+        await save(state);
+      }
+      return { ok: true };
+    }),
     grant: (message, sender) => locked(async state => {
       const task = state.tasks[message.siteId];
       if (!valid(task, message, sender) || task.mode !== 'execute' || !state.settings.sites[task.siteId] || (task.source === 'scheduled' && !state.settings.enabled) || !C.canSubmit(task, { taskId: message.taskId, tabId: sender.tab.id }, now())) return { allowed: false };
       task.nativeVerification = task.siteId === 'sb' && message.nativeVerification === true;
-      task.submittedAt = now(); task.updatedAt = now(); task.status = 'submitting'; task.message = '已发放一次提交许可，正在等待网站确认。'; task.expiresAt = now() + RESULT_MS;
-      trace(task, 'submitting');
+      task.submitPermitAt = now(); task.submittedAt = task.submitPermitAt; task.updatedAt = now(); task.status = 'submitting'; task.message = '已发放一次签到点击许可，正在等待页面点击及网站确认。'; task.expiresAt = now() + RESULT_MS;
+      trace(task, 'submitting', 'submit_permitted');
       // Persist before responding: a lost response must never produce a second permit.
       await save(state);
       await deadline(task);
@@ -221,17 +336,24 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
       if (!valid(task, message, sender) || task.siteId !== 'sb' || !task.owned || !task.nativeVerification || task.mode !== 'execute' || task.submittedAt == null || task.verificationAttemptedAt != null || task.uncertain || task.expiresAt <= now() || !['submitting', 'waiting_verification'].includes(task.status) || !state.settings.sites.sb || (task.source === 'scheduled' && !state.settings.enabled)) return { allowed: false };
       // Like the submit permit, persist before replying so a lost response or
       // worker restart cannot cause a second verification click.
-      task.verificationAttemptedAt = now(); task.updatedAt = now();
-      trace(task, 'waiting_verification', 'verification_clicked');
+      task.verificationPermitAt = now(); task.verificationAttemptedAt = task.verificationPermitAt; task.updatedAt = now();
+      trace(task, 'waiting_verification', 'verification_permitted');
       await save(state);
       return { allowed: true };
     }),
     report: (message, sender) => locked(async state => {
-      const task = state.tasks[message.siteId];
-      if (!valid(task, message, sender)) return { ok: false };
+      let task = state.tasks[message.siteId];
+      if (!valid(task, message, sender)) {
+        const origin = state.recoveries[message.siteId]?.origin;
+        if (message.status !== 'already_done' || !valid(origin, message, sender) || new URL(sender.tab.url).hash !== marker(origin.id)) return { ok: false };
+        await retire(task, true);
+        task = origin; state.tasks[message.siteId] = task;
+      }
       if (['success', 'already_done', 'cancelled', 'failed', 'retry_pending', 'idle'].includes(task.status)) return { ok: true, stopped: true };
       if (!['loading', 'already_done', 'ready', 'waiting_verification', 'needs_login', 'failed', 'cancelled', 'unknown'].includes(message.status)) return { ok: false };
       observe(task, message);
+      const recovery = state.recoveries[task.siteId];
+      if (recovery?.checkTaskId === task.id && message.status !== 'ready') delete recovery.checkedAt;
       if (message.status === 'loading') {
         if (task.status === 'checking') task.message = `${C.DETAILS[task.lastObservation?.code] || '网站正在加载'}，正在等待。`;
         await save(state);
@@ -239,6 +361,7 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
         await finish(state, task, task.submittedAt != null ? 'success' : 'already_done');
       } else if (message.status === 'ready') {
         task.checkedAt = now();
+        if (recovery?.checkTaskId === task.id) recovery.checkedAt = now();
         if (task.submittedAt != null || task.uncertain || task.status === 'unknown') await finish(state, task, 'unknown');
         else if (task.mode === 'inspect') await finish(state, task, 'idle');
         else {
@@ -324,6 +447,16 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
     }),
     open: siteId => locked(async state => {
       if (!C.SITES[siteId]) throw new Error('不支持的网站');
+      const recovery = state.recoveries[siteId];
+      if (recovery) {
+        const page = await ownedPage(recovery.origin);
+        if (!page) return { ok: false, outcome: 'original_missing', error: '原任务页面已关闭或离开签到页。请核对结果后再确认是否重试。' };
+        await api.tabs.update(page.id, { active: true });
+        if (page.windowId != null) await api.windows.update(page.windowId, { focused: true });
+        await save(state);
+        try { await api.tabs.sendMessage(page.id, { type: 'CHECKIN_POLL' }); } catch { /* Page attaches after loading. */ }
+        return { ok: true, outcome: 'original_opened' };
+      }
       const task = state.tasks[siteId];
       if (task?.tabId) {
         try {
