@@ -19,9 +19,12 @@ async function handle(message, sender) {
   if (message.type === 'CHECKIN_GRANT') return controller.grant(message, sender);
   if (message.type === 'CHECKIN_VERIFY_GRANT') return controller.grantVerification(message, sender);
   if (message.type === 'CHECKIN_REPORT') return controller.report(message, sender);
+  if (message.type === 'CHECKIN_PROGRESS') return controller.progress(message, sender);
   if (!isUI(sender)) return { ok: false };
   if (message.type === 'UI_SNAPSHOT') return { ok: true, ...await controller.snapshot() };
   if (message.type === 'UI_RECHECK_STALE') return controller.recheckStale();
+  if (message.type === 'UI_RECOVERY_CHECK') return controller.checkRecovery(message.siteId);
+  if (message.type === 'UI_RECOVERY_RETRY') return controller.retryRecovery(message.siteId, { taskId: message.taskId, confirmed: message.confirmed === true });
   if (message.type === 'UI_START') {
     const sites = message.siteId ? [message.siteId] : Object.keys(C.SITES);
     if (sites.some(id => !C.SITES[id])) return { ok: false };

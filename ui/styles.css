@@ -21,3 +21,13 @@
 .popup .pill.pending{color:#fffef8;background:#2c627d;border-color:#2c627d}
 .popup .pill.muted{color:#59665c;background:#ebeee6;border-color:#c9d1c3}
 .popup .status-icon{font-size:15px;line-height:16px;font-weight:700}
+.site-bottom{flex-wrap:wrap}.site-actions{margin-left:auto}
+#recovery-dialog{width:352px;max-width:calc(100% - 32px);max-height:calc(100% - 32px);overflow:auto;border:1px solid var(--line);border-radius:12px;padding:20px;background:var(--white);color:var(--ink);box-shadow:0 15px 70px #203e3233}
+#recovery-dialog::backdrop{background:#203e326b}
+#recovery-dialog h2{font-size:18px;margin:7px 0 12px}
+#recovery-dialog p{font-size:12px;line-height:1.8;margin:10px 0}
+#recovery-warning{color:var(--rust)}
+#recovery-status{padding:10px;background:#e9eddf;border-radius:6px}
+#recovery-dialog small{font-size:10px;color:var(--muted)}
+.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}
+.dialog-actions button{font-size:12px;padding:8px 11px;min-height:36px}

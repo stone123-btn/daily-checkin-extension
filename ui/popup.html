@@ -29,6 +29,13 @@
       <p id="message-feedback" class="editor-feedback" role="status" aria-live="polite">保存后持续使用，下次新任务生效。</p>
     </form>
   </template>
+  <dialog id="recovery-dialog" aria-labelledby="recovery-title" aria-describedby="recovery-warning">
+    <span class="eyebrow">核对后重试</span><h2 id="recovery-title">确认重新签到</h2>
+    <p id="recovery-warning">上一次提交可能仍在处理中，重新签到可能造成重复操作。请先检查原页面，再决定是否重试。</p>
+    <p id="recovery-status" role="status" aria-live="polite">正在核对网站结果…</p>
+    <small>确认后使用最新已保存的留言；未保存的草稿不生效。</small>
+    <div class="dialog-actions"><button id="recovery-cancel" class="secondary" autofocus>暂不重试</button><button id="recovery-confirm" class="primary" disabled>确认重新签到</button></div>
+  </dialog>
   <script src="../shared/core.js"></script><script type="module" src="popup.js"></script>
 </body>
 </html>
