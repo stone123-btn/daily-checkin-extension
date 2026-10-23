@@ -10,7 +10,7 @@ const FINAL = new Set(['success', 'already_done', 'unknown', 'failed', 'idle', '
 const MESSAGES = {
   checking: '正在检查网站的签到状态。',
   waiting_verification: '请打开处理页面完成验证，通过后自动继续。',
-  needs_login: '请在网站登录，再返回签到页继续。',
+  needs_login: '网站要求登录，请重新登录后返回签到页继续。',
   already_done: '网站确认今日已签到。', success: '网站已显示签到成功。',
   idle: '今日尚未签到，可点击签到按钮执行。',
   unknown: '已尝试提交，结果尚未确认；只查询状态，不重复提交。',
@@ -114,7 +114,8 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
     if (!ATTENTION.has(task.status) || !state.settings.notifications) return;
     try {
       if (!await api.permissions.contains({ permissions: ['notifications'] })) return;
-      await api.notifications.create(`checkin:${task.siteId}`, { type: 'basic', iconUrl: 'icons/icon128.png', title: `${C.SITES[task.siteId].name} · ${C.LABELS[task.status]}`, message: task.message });
+      const label = ['login_required', 'login_timeout'].includes(task.attentionReason) ? C.LABELS.needs_login : C.LABELS[task.status];
+      await api.notifications.create(`checkin:${task.siteId}`, { type: 'basic', iconUrl: 'icons/icon128.png', title: `${C.SITES[task.siteId].name} · ${label}`, message: task.message });
     } catch { /* The badge remains available when OS notifications are unavailable. */ }
   }
   async function closeOwned(task) {
@@ -165,11 +166,23 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
     await closeOwned(task);
   }
   async function deadline(task) { await api.alarms.create(deadlineName(task), { when: task.expiresAt }); }
+  async function requireLogin(state, task) {
+    const status = task.submittedAt != null || task.uncertain || task.status === 'unknown' ? 'unknown' : 'needs_login';
+    const changed = task.status !== status;
+    const newReason = !['login_required', 'login_timeout'].includes(task.attentionReason);
+    task.attentionReason = 'login_required';
+    observe(task, { status: 'needs_login', detail: 'login_required' });
+    if (changed && status === 'needs_login') task.expiresAt = now() + VERIFY_MS;
+    await finish(state, task, status, status === 'unknown' ? '网站要求重新登录。上次提交结果尚未确认；登录后只核对结果，不重复提交。' : MESSAGES.needs_login);
+    if (!changed && newReason) await notify(state, task);
+    if (status === 'needs_login') await deadline(task);
+  }
   async function fail(state, task, retryable) {
     if (task.submittedAt != null || task.uncertain) return finish(state, task, 'unknown');
     task.retryable = retryable && task.mode === 'execute';
     const when = C.retryAt(task, now());
-    const detail = C.DETAILS[task.lastObservation?.code] || C.DETAILS[retryable ? 'page_timeout' : 'unknown_controls'];
+    const missingRegion = task.lastObservation?.code === (task.siteId === 'sb' ? 'form_missing' : 'region_missing');
+    const detail = missingRegion ? `${C.DETAILS[task.lastObservation.code]}，请先检查 ${C.SITES[task.siteId].name} 是否需要重新登录` : C.DETAILS[task.lastObservation?.code] || C.DETAILS[retryable ? 'page_timeout' : 'unknown_controls'];
     if (when) {
       task.status = 'retry_pending'; task.message = `${detail}，将在${task.retryCount === 0 ? 5 : 15}分钟后重试。`; task.updatedAt = now(); task.nextRetryAt = when;
       trace(task, 'retry_pending', task.lastObservation?.code || 'page_timeout');
@@ -360,6 +373,7 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
       } else if (message.status === 'already_done') {
         await finish(state, task, task.submittedAt != null ? 'success' : 'already_done');
       } else if (message.status === 'ready') {
+        if (['login_required', 'login_timeout'].includes(task.attentionReason)) delete task.attentionReason;
         task.checkedAt = now();
         if (recovery?.checkTaskId === task.id) recovery.checkedAt = now();
         if (task.submittedAt != null || task.uncertain || task.status === 'unknown') await finish(state, task, 'unknown');
@@ -367,7 +381,9 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
         else {
           task.status = 'checking'; task.message = '页面已准备，等待提交许可。'; task.updatedAt = now(); await save(state);
         }
-      } else if (['waiting_verification', 'needs_login'].includes(message.status)) {
+      } else if (message.status === 'needs_login') {
+        await requireLogin(state, task);
+      } else if (message.status === 'waiting_verification') {
         if (message.status === 'waiting_verification' && message.reason === 'native_verification' && task.nativeVerification && task.submittedAt != null && ['submitting', 'waiting_verification'].includes(task.status)) {
           const detail = ['verification_clicked', 'verification_running', 'verification_error', 'verification_unavailable'].includes(message.detail) ? message.detail : null;
           const verificationMessage = detail ? `${C.DETAILS[detail]}。${['verification_error', 'verification_unavailable'].includes(detail) ? '请打开原页面手动完成验证。' : '正在等待网站结果，如未继续请打开原页面处理。'}` : undefined;
@@ -394,7 +410,10 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
         task.attentionReason = 'verification_timeout';
         await finish(state, task, task.submittedAt != null || task.uncertain ? 'unknown' : 'failed', task.submittedAt != null ? VERIFICATION_TIMEOUT_MESSAGE : '机器人验证等待已超时。请打开网站完成验证后，再点击签到继续。');
       } else if (task.submittedAt != null) await finish(state, task, 'unknown');
-      else if (['waiting_verification', 'needs_login'].includes(task.status)) await finish(state, task, 'failed', '等待处理已超时，页面保留；处理后可重新发起签到。');
+      else if (task.status === 'needs_login') {
+        task.attentionReason = 'login_timeout';
+        await finish(state, task, 'failed', '登录等待已超时，请重新登录后再发起签到；原页面已保留。');
+      }
       else await fail(state, task, true);
     }),
     retry: (siteId, taskId) => locked(async state => {
@@ -434,21 +453,18 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
     }),
     tabUpdated: (tabId, url) => locked(async state => {
       for (const task of Object.values(state.tasks)) {
-        if (task.tabId !== tabId || !C.ACTIVE.has(task.status)) continue;
+        if (task.tabId !== tabId || (!C.ACTIVE.has(task.status) && task.status !== 'unknown')) continue;
         try {
           const parsed = new URL(url);
-          if (parsed.protocol === 'https:' && parsed.hostname === C.SITES[task.siteId].host && /^\/(?:login|signin)(?:\.html)?(?:\/|$)/i.test(parsed.pathname) && task.status !== 'needs_login') {
-            task.expiresAt = now() + VERIFY_MS;
-            await finish(state, task, task.submittedAt != null ? 'unknown' : 'needs_login');
-            await deadline(task);
-          }
+          if (parsed.protocol === 'https:' && parsed.hostname === C.SITES[task.siteId].host && /^\/(?:login|signin)(?:\.html)?(?:\/|$)/i.test(parsed.pathname)) await requireLogin(state, task);
         } catch { /* No stable URL yet. */ }
       }
     }),
     open: siteId => locked(async state => {
       if (!C.SITES[siteId]) throw new Error('不支持的网站');
       const recovery = state.recoveries[siteId];
-      if (recovery) {
+      const task = state.tasks[siteId];
+      if (recovery && task?.status !== 'needs_login' && !['login_required', 'login_timeout'].includes(task?.attentionReason)) {
         const page = await ownedPage(recovery.origin);
         if (!page) return { ok: false, outcome: 'original_missing', error: '原任务页面已关闭或离开签到页。请核对结果后再确认是否重试。' };
         await api.tabs.update(page.id, { active: true });
@@ -457,7 +473,6 @@ export function createController({ chrome: api, now = Date.now, uuid = () => cry
         try { await api.tabs.sendMessage(page.id, { type: 'CHECKIN_POLL' }); } catch { /* Page attaches after loading. */ }
         return { ok: true, outcome: 'original_opened' };
       }
-      const task = state.tasks[siteId];
       if (task?.tabId) {
         try {
           const tab = await api.tabs.get(task.tabId);

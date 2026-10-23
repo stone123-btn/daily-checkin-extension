@@ -42,7 +42,7 @@ function renderRecovery(value) {
   if (recovery.canRetry) {
     $('#recovery-status').textContent = '网站当前显示可签到。确认后将关闭旧任务页，重新填写并点击签到。';
     confirm.disabled = false;
-  } else if (task.status === 'needs_login') $('#recovery-status').textContent = '核对页面需要登录，暂时不能重试。请处理后重新核对。';
+  } else if (task.status === 'needs_login' || ['login_required', 'login_timeout'].includes(task.attentionReason)) $('#recovery-status').textContent = '核对页面需要重新登录，暂时不能重试。请处理后重新核对。';
   else if (task.lastObservation?.status === 'ready') $('#recovery-status').textContent = '核对已超过 30 秒。请取消后重新尝试，获取最新结果。';
   else if (task.status === 'checking') $('#recovery-status').textContent = '正在加载签到页并核对结果…';
   else $('#recovery-status').textContent = '尚未确认页面可以签到，暂时不能重试。请先处理网站提示。';
@@ -111,18 +111,19 @@ async function refresh() {
     const recovery = value.recoveries?.[site.id];
     const enabled = value.settings.sites[site.id];
     const { card, status, description, checked, actions } = cards.get(site.id);
+    const loginNeeded = task?.status === 'needs_login' || ['login_required', 'login_timeout'].includes(task?.attentionReason);
     const verificationExpired = task?.attentionReason === 'verification_timeout' || recovery?.reason === 'verification_timeout';
     const verificationRunning = task?.status === 'waiting_verification' && ['verification_clicked', 'verification_running'].includes(task.lastObservation?.code);
     const state = !enabled ? 'muted' : completed.has(task?.status) ? 'complete' : recovery ? 'attention' : task?.status === 'idle' ? 'todo' :
       attention.has(task?.status) && !verificationRunning ? 'attention' : active.has(task?.status) ? 'pending' : 'muted';
-    const statusLabel = verificationExpired ? '验证已超时' : verificationRunning ? '验证中' :
+    const statusLabel = loginNeeded ? task?.attentionReason === 'login_timeout' ? '登录已超时' : '需要重新登录' : verificationExpired ? '验证已超时' : verificationRunning ? '验证中' :
       state === 'complete' ? '今日已签到' : state === 'todo' ? '今日未签到' : C.LABELS[task?.status] || '待检查';
     const icon = element('span', 'status-icon', { complete: '✓', todo: '○', attention: '!', pending: '…', muted: '—' }[state]);
     icon.setAttribute('aria-hidden', 'true');
     status.replaceChildren(icon, document.createTextNode(enabled ? statusLabel : '已停用'));
     status.className = `pill ${state}`;
     card.dataset.state = state;
-    description.textContent = !enabled ? '在设置中启用此网站后即可运行。' : recovery ?
+    description.textContent = !enabled ? '在设置中启用此网站后即可运行。' : loginNeeded ? task.message : recovery ?
       `${C.DETAILS[recovery.reason] || '上次结果未确认'}。${task?.status === 'checking' ? '正在核对网站结果。' : recovery.canRetry ? '当前可签到，重试前需再次核对并确认。' : '请继续原任务，或核对后确认重试。'}` :
       task?.message || (site.id === 'sb' ? '使用已保存的固定留言签到。' : '默认固定领取 5 鸡腿，需要验证时提醒你。');
     checked.textContent = checkedAt(task);
@@ -134,7 +135,7 @@ async function refresh() {
       check.disabled = retry.disabled = active.has(task?.status);
       buttons.push(check, retry);
     } else if (enabled && !active.has(task?.status)) buttons.push(button(task?.status === 'unknown' ? '查询结果' : '签到', task?.status === 'unknown' ? 'inspect' : 'start', site.id));
-    buttons.push(button(verificationExpired ? '继续验证 ↗' : recovery ? '原任务页 ↗' : attention.has(task?.status) ? '打开处理 ↗' : '打开网站 ↗', 'open', site.id));
+    buttons.push(button(loginNeeded ? '重新登录 ↗' : verificationExpired ? '继续验证 ↗' : recovery ? '原任务页 ↗' : attention.has(task?.status) ? '打开处理 ↗' : '打开网站 ↗', 'open', site.id));
     actions.replaceChildren(...buttons);
   }
   const none = !Object.values(value.settings.sites).some(Boolean);

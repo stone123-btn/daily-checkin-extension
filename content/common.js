@@ -128,6 +128,12 @@
         show(view.status, detail ? `${C.DETAILS[detail]}。如未继续，请打开原页面手动处理。` : view.message); return;
       }
       if (view.status !== 'ready') return;
+      if ((task.status === 'needs_login' && task.mode === 'execute' && !attempted) ||
+          (task.status === 'unknown' && task.attentionReason === 'login_required')) {
+        await report('ready');
+        await attach();
+        if (!task || stopped) return;
+      }
       if (attempted) {
         show(task.status === 'unknown' ? 'unknown' : 'submitting', task.status === 'unknown' ? task.message : submitClicked ? '已点击签到，正在等待网站确认结果。' : '已发放签到点击许可，正在核对网站结果。');
         return;

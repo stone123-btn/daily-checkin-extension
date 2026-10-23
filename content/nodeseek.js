@@ -2,10 +2,12 @@
   'use strict';
   const D = globalThis.CheckinDOM;
   function inspect(doc) {
-    const head = doc.querySelector('.board .head-info');
+    const board = doc.querySelector('.board');
+    const head = board?.querySelector('.head-info');
     if (head && /今日签到获得鸡腿\s*\d+\s*个/.test(D.text(head))) return { status: 'already_done', message: '网站确认今日已签到。' };
-    const blocked = D.blockers(doc, head);
+    const blocked = D.blockers(doc, head || board);
     if (blocked) return blocked;
+    if (!head && D.loginEntry(doc, 'nodeseek')) return { status: 'needs_login', message: '请重新登录 NodeSeek 后返回签到页。' };
     if (!head) return D.loading('region_missing');
     if (/^Loading$/i.test(D.text(head))) return D.loading('loading_data');
     const check = D.verification(head);
