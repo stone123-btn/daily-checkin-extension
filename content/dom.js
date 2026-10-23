@@ -14,13 +14,23 @@
     return typeof el.getClientRects !== 'function' || el.getClientRects().length > 0;
   }
   function blockers(doc, scope) {
-    if (doc.querySelector('form input[type="password"]') || /请(?:先)?登录|登录后.{0,15}签到/.test(text(scope))) {
+    if (doc.querySelector('form input[type="password"]') || /请(?:先|重新)?登录|(?:尚未|未)登录|登录(?:信息|状态)?(?:已)?(?:失效|过期)|登录后.{0,15}签到/.test(text(scope))) {
       return { status: 'needs_login', message: '请在网站登录后返回签到页。' };
     }
     if (doc.querySelector('#challenge-form, #challenge-running, #cf-challenge-running') || /just a moment|attention required/i.test(doc.title)) {
       return { status: 'waiting_verification', message: '请打开网站完成访问验证，通过后自动继续。' };
     }
     return null;
+  }
+  function loginEntry(doc, siteId) {
+    const site = CheckinCore.SITES[siteId];
+    return [...doc.querySelectorAll('header a[href], nav a[href]')].some(link => {
+      if (!visible(link) || link.closest('article, blockquote, pre, code') || !/^(?:登录|登入|log\s*in|sign\s*in)$/i.test(text(link))) return false;
+      try {
+        const url = new URL(link.getAttribute('href'), site.url);
+        return url.protocol === 'https:' && !url.port && url.hostname === site.host && /^\/(?:login|signin)(?:\.html)?\/?$/i.test(url.pathname);
+      } catch { return false; }
+    });
   }
   function verification(scope) {
     if (!scope) return { required: false, passed: true };
@@ -36,6 +46,6 @@
   }
   const failed = (message, detail = 'unknown_controls') => ({ status: 'failed', reason: 'structure', detail, message });
   const loading = detail => ({ status: 'loading', detail, message: `${CheckinCore.DETAILS[detail]}，正在等待。` });
-  globalThis.CheckinDOM = Object.freeze({ text, visible, blockers, verification, failed, loading });
+  globalThis.CheckinDOM = Object.freeze({ text, visible, blockers, loginEntry, verification, failed, loading });
   globalThis.CheckinAdapters ||= {};
 })();

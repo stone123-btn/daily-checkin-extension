@@ -19,7 +19,7 @@
     loading_data: '网站正在读取签到数据', ambiguous_form: '签到表单不唯一',
     ambiguous_controls: '留言框或签到按钮不唯一', unknown_controls: '未找到唯一、明确的签到按钮',
     network: '页面加载失败', page_timeout: '等待网站签到区域超时',
-    verification_timeout: '机器人验证等待已超时', login_timeout: '登录等待已超时',
+    verification_timeout: '机器人验证等待已超时', login_required: '网站要求重新登录', login_timeout: '登录等待已超时',
     verification_clicked: '已尝试点击网站原生验证', verification_running: '网站正在执行机器人验证',
     verification_error: '网站验证未通过，需要手动处理', verification_unavailable: '验证按钮发生变化，需要手动处理',
     message_prepared: '签到留言已准备', submit_permitted: '已发放一次签到点击许可', submit_clicked: '页面已点击签到按钮',

@@ -11,7 +11,15 @@
       try { return (f.getAttribute('method') || '').toLowerCase() === 'post' && CheckinCore.siteForUrl(new URL(f.getAttribute('action') || '', CheckinCore.SITES.sb.url).href) === 'sb'; }
       catch { return false; }
     });
-    if (!forms.length) return D.loading('form_missing');
+    if (!forms.length) {
+      if (D.loginEntry(doc, 'sb')) return { status: 'needs_login', message: '请重新登录烧饼后返回签到页。' };
+      const notices = [...doc.querySelectorAll('main [role="alert"], main .alert')].filter(el => D.visible(el) && !el.closest('article, blockquote, pre, code') && !el.querySelector('article, blockquote, pre, code'));
+      for (const notice of notices) {
+        const login = D.blockers(doc, notice);
+        if (login?.status === 'needs_login') return login;
+      }
+      return D.loading('form_missing');
+    }
     if (forms.length !== 1) return D.failed('未找到唯一的签到表单，请打开网站确认页面结构。', 'ambiguous_form');
     const form = forms[0];
     const fields = [...form.querySelectorAll('input:not([type]), input[type="text"], textarea')].filter(f => !f.disabled && !f.readOnly && D.visible(f) && !/captcha|turnstile/i.test(f.name || ''));
